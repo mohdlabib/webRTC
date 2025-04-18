@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Client</title>
+</head>
+
+<body>
+    <h1>Client (Camera)</h1>
+    <video id="localVideo" autoplay playsinline muted></video>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        socket.emit('role', 'client');
+
+        const localVideo = document.getElementById('localVideo');
+        let peer;
+
+        let monitorSocketId = null;
+
+        socket.on('monitor-available', (id) => {
+            monitorSocketId = id;
+
+            peer = new RTCPeerConnection();
+
+            navigator.mediaDevices.getUserMedia({
+                video: true
+            }).then(stream => {
+                localVideo.srcObject = stream;
+                stream.getTracks().forEach(track => {
+                    peer.addTrack(track, stream);
+                });
+
+                peer.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit('ice-candidate', {
+                            target: monitorSocketId,
+                            candidate: event.candidate
+                        });
+                    }
+                };
+
+                peer.createOffer().then(offer => {
+                    return peer.setLocalDescription(offer);
+                }).then(() => {
+                    socket.emit('offer', {
+                        target: monitorSocketId,
+                        offer: peer.localDescription
+                    });
+                });
+            });
+
+            socket.on('answer', ({
+                answer
+            }) => {
+                peer.setRemoteDescription(new RTCSessionDescription(answer));
+            });
+
+            socket.on('ice-candidate', ({
+                candidate
+            }) => {
+                peer.addIceCandidate(new RTCIceCandidate(candidate));
+            });
+        });
+
+        socket.emit('get-monitor');
+    </script>
+</body>
+
+</html>

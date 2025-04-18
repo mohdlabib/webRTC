@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Monitor</title>
+    <style>
+        video {
+            width: 100%;
+            max-width: 720px;
+            background: black;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Monitor</h1>
+    <video id="remoteVideo" autoplay playsinline muted></video>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        socket.emit('role', 'monitor');
+
+        const remoteVideo = document.getElementById('remoteVideo');
+        let peer;
+        let clientSocketId;
+
+        socket.on('new-client', (clientId) => {
+            console.log('🆕 New client:', clientId);
+            clientSocketId = clientId;
+
+            peer = new RTCPeerConnection();
+
+            peer.ontrack = (event) => {
+                const stream = event.streams[0];
+                console.log('📡 Stream received:', stream);
+                remoteVideo.srcObject = stream;
+                remoteVideo.onloadedmetadata = () => remoteVideo.play();
+            };
+
+            peer.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', {
+                        target: clientSocketId,
+                        candidate: event.candidate
+                    });
+                }
+            };
+
+            socket.emit('offer-request', {
+                monitorSocketId: socket.id
+            });
+        });
+
+        socket.on('offer', ({
+            sender,
+            offer
+        }) => {
+            clientSocketId = sender;
+            peer.setRemoteDescription(new RTCSessionDescription(offer)).then(() => {
+                return peer.createAnswer();
+            }).then(answer => {
+                return peer.setLocalDescription(answer);
+            }).then(() => {
+                socket.emit('answer', {
+                    target: sender,
+                    answer: peer.localDescription
+                });
+            });
+        });
+
+        socket.on('ice-candidate', ({
+            candidate
+        }) => {
+            peer.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+    </script>
+</body>
+
+</html>
