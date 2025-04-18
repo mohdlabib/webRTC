@@ -2,77 +2,175 @@
 <html>
   <head>
     <title>Client</title>
+    <style>
+      .status {
+        padding: 5px 10px;
+        border-radius: 4px;
+        display: inline-block;
+        margin-left: 10px;
+      }
+      .connected {
+        background-color: #4caf50;
+        color: white;
+      }
+      .disconnected {
+        background-color: #f44336;
+        color: white;
+      }
+    </style>
   </head>
 
   <body>
-    <h1>Client (Camera)</h1>
+    <h1>
+      Client (Camera)
+      <span id="connectionStatus" class="status disconnected"
+        >Disconnected</span
+      >
+    </h1>
     <video id="localVideo" autoplay playsinline muted></video>
     <script src="/socket.io/socket.io.js"></script>
     <script>
+      // Connection state management
+      let mediaStream = null;
+      let peer = null;
+      let monitorSocketId = null;
+      let reconnecting = false;
+      const connectionStatus = document.getElementById("connectionStatus");
+
+      // Check if we have a previous session
+      const previousSocketId = localStorage.getItem("clientSocketId");
+
+      // Initialize socket connection
       const socket = io();
-      socket.emit("role", "client");
+
+      // Send role with previous ID if available
+      socket.emit("role", "client", previousSocketId);
+
+      // Store current socket ID for reconnection
+      socket.on("connect", () => {
+        console.log("🔌 Socket connected, ID:", socket.id);
+        localStorage.setItem("clientSocketId", socket.id);
+      });
 
       const localVideo = document.getElementById("localVideo");
-      let peer;
 
-      let monitorSocketId = null;
+      // Function to set up WebRTC connection
+      function setupWebRTCConnection(monitorId) {
+        console.log("📡 Setting up connection to monitor:", monitorId);
+        monitorSocketId = monitorId;
+        connectionStatus.textContent = "Connecting...";
 
-      socket.on("monitor-available", (id) => {
-        console.log("📡 Monitor available:", id);
-        monitorSocketId = id;
+        // Create new peer connection if needed
+        if (
+          !peer ||
+          peer.connectionState === "closed" ||
+          peer.connectionState === "failed"
+        ) {
+          peer = new RTCPeerConnection({
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+          });
+          console.log("🔄 Created RTCPeerConnection");
 
-        peer = new RTCPeerConnection({
-          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-        });
-        console.log("🔄 Created RTCPeerConnection");
+          // Set up connection state change handlers
+          peer.oniceconnectionstatechange = () => {
+            console.log("💡 ICE connection state:", peer.iceConnectionState);
+            if (
+              peer.iceConnectionState === "connected" ||
+              peer.iceConnectionState === "completed"
+            ) {
+              connectionStatus.textContent = "Connected";
+              connectionStatus.className = "status connected";
+              // Store connection info for potential reconnection
+              localStorage.setItem("connectedToMonitor", monitorSocketId);
+            } else if (
+              peer.iceConnectionState === "disconnected" ||
+              peer.iceConnectionState === "failed"
+            ) {
+              connectionStatus.textContent = "Disconnected";
+              connectionStatus.className = "status disconnected";
+            }
+          };
 
-        navigator.mediaDevices
-          .getUserMedia({
-            video: true,
-            audio: false,
-          })
-          .then((stream) => {
-            console.log("✅ Got media stream:", stream);
-            localVideo.srcObject = stream;
-            stream.getTracks().forEach((track) => {
-              console.log("➕ Adding track to peer connection:", track.kind);
-              peer.addTrack(track, stream);
-            });
+          peer.onconnectionstatechange = () => {
+            console.log("🔗 Connection state:", peer.connectionState);
+          };
+        }
 
-            peer.onicecandidate = (event) => {
-              if (event.candidate) {
-                console.log("🧊 ICE candidate:", event.candidate);
-                socket.emit("ice-candidate", {
-                  target: monitorSocketId,
-                  candidate: event.candidate,
-                });
-              }
-            };
+        // Get or reuse media stream
+        const getMediaAndConnect = (stream) => {
+          console.log("✅ Using media stream:", stream);
+          mediaStream = stream;
+          localVideo.srcObject = stream;
 
-            peer
-              .createOffer()
-              .then((offer) => {
-                console.log("📝 Created offer");
-                return peer.setLocalDescription(offer);
-              })
-              .then(() => {
-                console.log("📤 Sending offer to monitor");
-                socket.emit("offer", {
-                  target: monitorSocketId,
-                  offer: peer.localDescription,
-                });
-              })
-              .catch((err) => {
-                console.error("❌ Error creating or sending offer:", err);
-              });
-          })
-          .catch((err) => {
-            console.error("❌ Error accessing camera:", err.name, err.message);
-            alert("Error accessing camera: " + err.message);
+          // Add tracks to peer connection
+          stream.getTracks().forEach((track) => {
+            console.log("➕ Adding track to peer connection:", track.kind);
+            peer.addTrack(track, stream);
           });
 
-        socket.on("answer", ({ answer }) => {
-          console.log("📥 Received answer from monitor");
+          // Set up ICE candidate handling
+          peer.onicecandidate = (event) => {
+            if (event.candidate) {
+              console.log("🧊 ICE candidate:", event.candidate);
+              socket.emit("ice-candidate", {
+                target: monitorSocketId,
+                candidate: event.candidate,
+              });
+            }
+          };
+
+          // Create and send offer
+          peer
+            .createOffer()
+            .then((offer) => {
+              console.log("📝 Created offer");
+              return peer.setLocalDescription(offer);
+            })
+            .then(() => {
+              console.log("📤 Sending offer to monitor");
+              socket.emit("offer", {
+                target: monitorSocketId,
+                offer: peer.localDescription,
+              });
+            })
+            .catch((err) => {
+              console.error("❌ Error creating or sending offer:", err);
+            });
+        };
+
+        // Use existing stream or get a new one
+        if (mediaStream && mediaStream.active) {
+          getMediaAndConnect(mediaStream);
+        } else {
+          navigator.mediaDevices
+            .getUserMedia({
+              video: true,
+              audio: false,
+            })
+            .then(getMediaAndConnect)
+            .catch((err) => {
+              console.error(
+                "❌ Error accessing camera:",
+                err.name,
+                err.message
+              );
+              alert("Error accessing camera: " + err.message);
+              connectionStatus.textContent = "Camera Error";
+              connectionStatus.className = "status disconnected";
+            });
+        }
+      }
+
+      // Handle monitor availability
+      socket.on("monitor-available", (id) => {
+        console.log("📡 Monitor available:", id);
+        setupWebRTCConnection(id);
+      });
+
+      // Handle answer from monitor
+      socket.on("answer", ({ answer }) => {
+        console.log("📥 Received answer from monitor");
+        if (peer) {
           peer
             .setRemoteDescription(new RTCSessionDescription(answer))
             .then(() => {
@@ -81,10 +179,13 @@
             .catch((err) => {
               console.error("❌ Error setting remote description:", err);
             });
-        });
+        }
+      });
 
-        socket.on("ice-candidate", ({ candidate }) => {
-          console.log("🧊 Received ICE candidate");
+      // Handle ICE candidates from monitor
+      socket.on("ice-candidate", ({ candidate }) => {
+        console.log("🧊 Received ICE candidate");
+        if (peer) {
           peer
             .addIceCandidate(new RTCIceCandidate(candidate))
             .then(() => {
@@ -93,26 +194,93 @@
             .catch((err) => {
               console.error("❌ Error adding ICE candidate:", err);
             });
-        });
-
-        peer.oniceconnectionstatechange = () => {
-          console.log("💡 ICE connection state:", peer.iceConnectionState);
-        };
-
-        peer.onconnectionstatechange = () => {
-          console.log("🔗 Connection state:", peer.connectionState);
-        };
+        }
       });
 
+      // Handle disconnection and reconnection
+      socket.on("disconnect", () => {
+        console.log("🔌 Socket disconnected");
+        connectionStatus.textContent = "Disconnected";
+        connectionStatus.className = "status disconnected";
+
+        // Don't close the peer connection immediately to allow for refresh reconnection
+      });
+
+      socket.on("reconnect", () => {
+        console.log("🔄 Socket reconnected");
+        // Re-register role with previous ID
+        socket.emit("role", "client", previousSocketId);
+
+        // Try to reconnect to the same monitor if we were connected before
+        const lastMonitorId = localStorage.getItem("connectedToMonitor");
+        if (lastMonitorId) {
+          console.log(
+            "🔄 Attempting to reconnect to previous monitor:",
+            lastMonitorId
+          );
+          socket.emit("get-monitor");
+        }
+      });
+
+      // Request monitor on page load
       socket.emit("get-monitor");
 
+      // Handle offer request from monitor
       socket.on("offer-request", ({ monitorSocketId }) => {
         console.log("📥 Received offer request from monitor:", monitorSocketId);
-        if (!peer && monitorSocketId) {
+        // This event is received when the monitor requests an offer
+        if (
+          !peer ||
+          peer.connectionState === "closed" ||
+          peer.connectionState === "failed"
+        ) {
           console.log(
             "🔄 Setting up peer connection in response to offer request"
           );
-          socket.emit("monitor-available", monitorSocketId);
+          setupWebRTCConnection(monitorSocketId);
+        } else if (
+          peer.connectionState === "connected" ||
+          peer.connectionState === "completed"
+        ) {
+          console.log("✅ Already connected to monitor");
+        } else {
+          console.log(
+            "🔄 Connection in progress, state:",
+            peer.connectionState
+          );
+        }
+      });
+
+      // Handle page visibility changes to manage reconnection
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          console.log("🔌 Page became visible, checking connection...");
+          // If we have a peer connection but it's disconnected, try to reconnect
+          if (
+            peer &&
+            (peer.iceConnectionState === "disconnected" ||
+              peer.connectionState === "disconnected")
+          ) {
+            console.log(
+              "🔄 Connection was disconnected, attempting to reconnect..."
+            );
+            socket.emit("get-monitor");
+          }
+        }
+      });
+
+      // Attempt to reconnect when the window is focused
+      window.addEventListener("focus", () => {
+        console.log("🔌 Window focused, checking connection...");
+        if (
+          peer &&
+          (peer.iceConnectionState === "disconnected" ||
+            peer.connectionState === "disconnected")
+        ) {
+          console.log(
+            "🔄 Connection was disconnected, attempting to reconnect..."
+          );
+          socket.emit("get-monitor");
         }
       });
     </script>

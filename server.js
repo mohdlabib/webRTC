@@ -1,28 +1,63 @@
-const express = require("express");
-const http = require("http");
-const socketIO = require("socket.io");
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIO(server);
+const io = new Server(server);
 
 app.use(express.static("public"));
 
+// Store connection information
 let monitorSocket = null;
 let latestClientSocket = null;
+let monitorId = null;
+let clientId = null;
+let connectionState = {
+  hasMonitor: false,
+  hasClient: false,
+  lastMonitorConnected: null,
+  lastClientConnected: null,
+};
+
+// API endpoint to get connection status
+app.get("/connection-status", (req, res) => {
+  res.json(connectionState);
+});
 
 io.on("connection", (socket) => {
   console.log("🔌 New connection:", socket.id);
 
-  socket.on("role", (role) => {
+  socket.on("role", (role, previousId = null) => {
     if (role === "monitor") {
       monitorSocket = socket;
-      console.log("📺 Monitor connected:", socket.id);
+      monitorId = socket.id;
+      connectionState.hasMonitor = true;
+      connectionState.lastMonitorConnected = new Date().toISOString();
+      console.log(
+        "📺 Monitor connected:",
+        socket.id,
+        previousId ? "(reconnected)" : ""
+      );
+
+      // If this is a reconnection and there's a client, notify the monitor
+      if (previousId && latestClientSocket) {
+        console.log("🔄 Notifying reconnected monitor about existing client");
+        socket.emit("new-client", latestClientSocket.id);
+      }
     } else if (role === "client") {
       latestClientSocket = socket;
-      console.log("📷 Client connected:", socket.id);
+      clientId = socket.id;
+      connectionState.hasClient = true;
+      connectionState.lastClientConnected = new Date().toISOString();
+      console.log(
+        "📷 Client connected:",
+        socket.id,
+        previousId ? "(reconnected)" : ""
+      );
 
       if (monitorSocket) {
+        console.log("🔄 Notifying monitor about client", socket.id);
         monitorSocket.emit("new-client", socket.id);
       }
     }
@@ -67,8 +102,30 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    if (socket === monitorSocket) monitorSocket = null;
-    if (socket === latestClientSocket) latestClientSocket = null;
+    if (socket === monitorSocket) {
+      console.log("❌ Monitor disconnected:", socket.id);
+      // Don't set to null immediately to allow for refresh reconnection
+      setTimeout(() => {
+        if (monitorSocket === socket) {
+          console.log("⏰ Monitor reconnection timeout expired");
+          monitorSocket = null;
+          connectionState.hasMonitor = false;
+        }
+      }, 5000); // 5 second grace period for refresh
+    }
+
+    if (socket === latestClientSocket) {
+      console.log("❌ Client disconnected:", socket.id);
+      // Don't set to null immediately to allow for refresh reconnection
+      setTimeout(() => {
+        if (latestClientSocket === socket) {
+          console.log("⏰ Client reconnection timeout expired");
+          latestClientSocket = null;
+          connectionState.hasClient = false;
+        }
+      }, 5000); // 5 second grace period for refresh
+    }
+
     console.log("❌ Disconnected:", socket.id);
   });
 });
