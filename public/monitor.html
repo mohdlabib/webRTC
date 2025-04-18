@@ -2,44 +2,147 @@
 <html>
   <head>
     <title>Monitor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Bootstrap CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
     <style>
+      body {
+        padding: 20px;
+        background-color: #f8f9fa;
+      }
+      .video-container {
+        margin-top: 20px;
+        background-color: #000;
+        border-radius: 8px;
+        overflow: hidden;
+        aspect-ratio: 16/9;
+        min-height: 400px;
+      }
       video {
         width: 100%;
-        max-width: 720px;
-        background: black;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+        background-color: #000;
       }
-      .status {
-        padding: 5px 10px;
-        border-radius: 4px;
-        display: inline-block;
-        margin-left: 10px;
+      .toast-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 1050;
       }
-      .connected {
-        background-color: #4caf50;
-        color: white;
+      .card {
+        margin-bottom: 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
       }
-      .disconnected {
-        background-color: #f44336;
-        color: white;
+      .card-header {
+        background-color: #f8f9fa;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+        font-weight: 600;
       }
     </style>
   </head>
 
   <body>
-    <h1>
-      Monitor
-      <span id="connectionStatus" class="status disconnected"
-        >Disconnected</span
+    <div class="container">
+      <div class="card">
+        <div
+          class="card-header d-flex justify-content-between align-items-center"
+        >
+          <h2 class="mb-0">Monitor</h2>
+        </div>
+        <div class="card-body">
+          <div class="video-container">
+            <video
+              id="remoteVideo"
+              autoplay
+              playsinline
+              muted
+              class="img-fluid"
+            ></video>
+            <div
+              id="noVideoMessage"
+              class="text-center text-white p-3"
+              style="display: none"
+            >
+              <p>Waiting for video stream from client...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast container for connection status -->
+    <div class="toast-container">
+      <div
+        id="connectionToast"
+        class="toast"
+        role="alert"
+        aria-live="assertive"
+        aria-atomic="true"
+        data-bs-autohide="false"
       >
-    </h1>
-    <video id="remoteVideo" autoplay playsinline muted></video>
+        <div class="toast-header" id="toastHeader">
+          <strong class="me-auto" id="connectionStatus">Disconnected</strong>
+          <button
+            type="button"
+            class="btn-close"
+            data-bs-dismiss="toast"
+            aria-label="Close"
+          ></button>
+        </div>
+        <div class="toast-body" id="toastBody">
+          Waiting for client connection...
+        </div>
+      </div>
+    </div>
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script>
       // Connection state management
       let peer = null;
       let clientSocketId = null;
       let reconnecting = false;
+
+      // Toast elements
       const connectionStatus = document.getElementById("connectionStatus");
+      const connectionToast = document.getElementById("connectionToast");
+      const toastHeader = document.getElementById("toastHeader");
+      const toastBody = document.getElementById("toastBody");
+
+      // Initialize Bootstrap toast
+      const toast = new bootstrap.Toast(connectionToast);
+      toast.show();
+
+      // Function to update connection status
+      function updateConnectionStatus(status, message) {
+        connectionStatus.textContent = status;
+        toastBody.textContent = message;
+
+        // Update toast header color based on status
+        toastHeader.className = "toast-header";
+        if (status === "Connected") {
+          toastHeader.classList.add("bg-success", "text-white");
+        } else if (status === "Connecting...") {
+          toastHeader.classList.add("bg-warning", "text-dark");
+        } else {
+          toastHeader.classList.add("bg-danger", "text-white");
+        }
+
+        // Show toast
+        toast.show();
+      }
+
+      // Initial status
+      updateConnectionStatus(
+        "Disconnected",
+        "Waiting for client connection..."
+      );
 
       // Check if we have a previous session
       const previousSocketId = localStorage.getItem("monitorSocketId");
@@ -54,15 +157,33 @@
       socket.on("connect", () => {
         console.log("🔌 Socket connected, ID:", socket.id);
         localStorage.setItem("monitorSocketId", socket.id);
+
+        // Request client on connection
+        socket.emit("get-client");
       });
 
-      const remoteVideo = document.getElementById("remoteVideo");
+      // Get DOM elements
+      const noVideoMessage = document.getElementById("noVideoMessage");
+
+      // Show/hide no video message
+      function toggleNoVideoMessage(show) {
+        noVideoMessage.style.display = show ? "block" : "none";
+      }
+
+      // Initially show the message
+      toggleNoVideoMessage(true);
 
       // Function to set up WebRTC connection
       function setupWebRTCConnection(clientId) {
         console.log("🆕 Setting up connection to client:", clientId);
         clientSocketId = clientId;
-        connectionStatus.textContent = "Connecting...";
+        updateConnectionStatus(
+          "Connecting...",
+          "Waiting for video stream from client..."
+        );
+
+        // Show waiting message
+        toggleNoVideoMessage(true);
 
         // Store client ID for reconnection
         localStorage.setItem("connectedToClient", clientId);
@@ -73,8 +194,20 @@
           peer.connectionState === "closed" ||
           peer.connectionState === "failed"
         ) {
+          // Close any existing peer connection
+          if (peer) {
+            try {
+              peer.close();
+            } catch (e) {
+              console.error("Error closing peer connection:", e);
+            }
+          }
+
           peer = new RTCPeerConnection({
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+            iceServers: [
+              { urls: "stun:stun.l.google.com:19302" },
+              { urls: "stun:stun1.l.google.com:19302" },
+            ],
           });
           console.log("🔄 Created RTCPeerConnection");
 
@@ -82,10 +215,56 @@
           peer.ontrack = (event) => {
             const stream = event.streams[0];
             console.log("📡 Stream received:", stream);
+
+            // Hide waiting message
+            toggleNoVideoMessage(false);
+
+            // Set video source and play
             remoteVideo.srcObject = stream;
+
+            // Make sure video plays
             remoteVideo.onloadedmetadata = () => {
-              console.log("▶️ Playing video");
-              remoteVideo.play();
+              console.log("▶️ Video metadata loaded, playing video");
+
+              // Try to play the video
+              const playPromise = remoteVideo.play();
+
+              if (playPromise !== undefined) {
+                playPromise
+                  .then(() => {
+                    console.log("✅ Video playback started successfully");
+                    updateConnectionStatus(
+                      "Connected",
+                      "Receiving video stream from client"
+                    );
+                  })
+                  .catch((error) => {
+                    console.error("❌ Error playing video:", error);
+                    // Try to play again with user interaction
+                    updateConnectionStatus(
+                      "Interaction Required",
+                      "Click on the video area to start playback"
+                    );
+
+                    // Add click handler to start playback
+                    remoteVideo.onclick = () => {
+                      remoteVideo
+                        .play()
+                        .then(() => {
+                          console.log(
+                            "✅ Video playback started after user interaction"
+                          );
+                          updateConnectionStatus(
+                            "Connected",
+                            "Receiving video stream from client"
+                          );
+                        })
+                        .catch((e) =>
+                          console.error("❌ Still cannot play video:", e)
+                        );
+                    };
+                  });
+              }
             };
           };
 
@@ -96,19 +275,37 @@
               peer.iceConnectionState === "connected" ||
               peer.iceConnectionState === "completed"
             ) {
-              connectionStatus.textContent = "Connected";
-              connectionStatus.className = "status connected";
+              updateConnectionStatus(
+                "Connected",
+                "Receiving video stream from client"
+              );
             } else if (
               peer.iceConnectionState === "disconnected" ||
               peer.iceConnectionState === "failed"
             ) {
-              connectionStatus.textContent = "Disconnected";
-              connectionStatus.className = "status disconnected";
+              updateConnectionStatus(
+                "Disconnected",
+                "Connection to client lost"
+              );
             }
           };
 
           peer.onconnectionstatechange = () => {
             console.log("🔗 Connection state:", peer.connectionState);
+            if (peer.connectionState === "connected") {
+              updateConnectionStatus(
+                "Connected",
+                "Receiving video stream from client"
+              );
+            } else if (
+              peer.connectionState === "disconnected" ||
+              peer.connectionState === "failed"
+            ) {
+              updateConnectionStatus(
+                "Disconnected",
+                "Connection to client lost"
+              );
+            }
           };
         }
 
@@ -196,8 +393,10 @@
       // Handle disconnection and reconnection
       socket.on("disconnect", () => {
         console.log("🔌 Socket disconnected");
-        connectionStatus.textContent = "Disconnected";
-        connectionStatus.className = "status disconnected";
+        updateConnectionStatus(
+          "Disconnected",
+          "Connection to server lost. Attempting to reconnect..."
+        );
 
         // Don't close the peer connection immediately to allow for refresh reconnection
       });
@@ -206,6 +405,9 @@
         console.log("🔄 Socket reconnected");
         // Re-register role with previous ID
         socket.emit("role", "monitor", previousSocketId);
+
+        // Request any available client
+        socket.emit("get-client");
 
         // Try to reconnect to the same client if we were connected before
         const lastClientId = localStorage.getItem("connectedToClient");
@@ -218,10 +420,17 @@
         }
       });
 
+      // Request client on page load
+      socket.emit("get-client");
+
       // Handle page visibility changes to manage reconnection
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
           console.log("🔌 Page became visible, checking connection...");
+
+          // Request any available client
+          socket.emit("get-client");
+
           // If we have a peer connection but it's disconnected, try to reconnect
           if (
             peer &&
@@ -242,6 +451,10 @@
       // Attempt to reconnect when the window is focused
       window.addEventListener("focus", () => {
         console.log("🔌 Window focused, checking connection...");
+
+        // Request any available client
+        socket.emit("get-client");
+
         if (
           peer &&
           (peer.iceConnectionState === "disconnected" ||

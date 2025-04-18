@@ -73,6 +73,16 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("get-client", () => {
+    console.log("🔍 Monitor requesting client:", socket.id);
+    if (latestClientSocket) {
+      console.log("📡 Sending new-client to monitor");
+      socket.emit("new-client", latestClientSocket.id);
+    } else {
+      console.log("❌ No client available");
+    }
+  });
+
   socket.on("offer-request", ({ monitorSocketId }) => {
     if (latestClientSocket) {
       latestClientSocket.emit("offer-request", {

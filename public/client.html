@@ -2,32 +2,93 @@
 <html>
   <head>
     <title>Client</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Bootstrap CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
     <style>
-      .status {
-        padding: 5px 10px;
-        border-radius: 4px;
-        display: inline-block;
-        margin-left: 10px;
+      body {
+        padding: 20px;
+        background-color: #f8f9fa;
       }
-      .connected {
-        background-color: #4caf50;
-        color: white;
+      .video-container {
+        margin-top: 20px;
+        background-color: #000;
+        border-radius: 8px;
+        overflow: hidden;
       }
-      .disconnected {
-        background-color: #f44336;
-        color: white;
+      video {
+        width: 100%;
+        max-height: 70vh;
+        display: block;
+      }
+      .toast-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 1050;
+      }
+      .card {
+        margin-bottom: 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      .card-header {
+        background-color: #f8f9fa;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+        font-weight: 600;
       }
     </style>
   </head>
 
   <body>
-    <h1>
-      Client (Camera)
-      <span id="connectionStatus" class="status disconnected"
-        >Disconnected</span
+    <div class="container">
+      <div class="card">
+        <div
+          class="card-header d-flex justify-content-between align-items-center"
+        >
+          <h2 class="mb-0">Client (Camera)</h2>
+        </div>
+        <div class="card-body">
+          <div class="video-container">
+            <video
+              id="localVideo"
+              autoplay
+              playsinline
+              muted
+              class="img-fluid"
+            ></video>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast container for connection status -->
+    <div class="toast-container">
+      <div
+        id="connectionToast"
+        class="toast"
+        role="alert"
+        aria-live="assertive"
+        aria-atomic="true"
+        data-bs-autohide="false"
       >
-    </h1>
-    <video id="localVideo" autoplay playsinline muted></video>
+        <div class="toast-header" id="toastHeader">
+          <strong class="me-auto" id="connectionStatus">Disconnected</strong>
+          <button
+            type="button"
+            class="btn-close"
+            data-bs-dismiss="toast"
+            aria-label="Close"
+          ></button>
+        </div>
+        <div class="toast-body" id="toastBody">Waiting for connection...</div>
+      </div>
+    </div>
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script>
       // Connection state management
@@ -35,7 +96,38 @@
       let peer = null;
       let monitorSocketId = null;
       let reconnecting = false;
+
+      // Toast elements
       const connectionStatus = document.getElementById("connectionStatus");
+      const connectionToast = document.getElementById("connectionToast");
+      const toastHeader = document.getElementById("toastHeader");
+      const toastBody = document.getElementById("toastBody");
+
+      // Initialize Bootstrap toast
+      const toast = new bootstrap.Toast(connectionToast);
+      toast.show();
+
+      // Function to update connection status
+      function updateConnectionStatus(status, message) {
+        connectionStatus.textContent = status;
+        toastBody.textContent = message;
+
+        // Update toast header color based on status
+        toastHeader.className = "toast-header";
+        if (status === "Connected") {
+          toastHeader.classList.add("bg-success", "text-white");
+        } else if (status === "Connecting...") {
+          toastHeader.classList.add("bg-warning", "text-dark");
+        } else {
+          toastHeader.classList.add("bg-danger", "text-white");
+        }
+
+        // Show toast
+        toast.show();
+      }
+
+      // Initial status
+      updateConnectionStatus("Disconnected", "Waiting for connection...");
 
       // Check if we have a previous session
       const previousSocketId = localStorage.getItem("clientSocketId");
@@ -58,7 +150,10 @@
       function setupWebRTCConnection(monitorId) {
         console.log("📡 Setting up connection to monitor:", monitorId);
         monitorSocketId = monitorId;
-        connectionStatus.textContent = "Connecting...";
+        updateConnectionStatus(
+          "Connecting...",
+          "Establishing connection to monitor..."
+        );
 
         // Create new peer connection if needed
         if (
@@ -78,21 +173,52 @@
               peer.iceConnectionState === "connected" ||
               peer.iceConnectionState === "completed"
             ) {
-              connectionStatus.textContent = "Connected";
-              connectionStatus.className = "status connected";
+              updateConnectionStatus(
+                "Connected",
+                "Video stream connected to monitor"
+              );
               // Store connection info for potential reconnection
               localStorage.setItem("connectedToMonitor", monitorSocketId);
+
+              // Log active senders to verify tracks are being sent
+              const senders = peer.getSenders();
+              console.log(
+                "📹 Active senders:",
+                senders.length,
+                senders.map((s) => (s.track ? s.track.kind : "no track"))
+              );
             } else if (
               peer.iceConnectionState === "disconnected" ||
               peer.iceConnectionState === "failed"
             ) {
-              connectionStatus.textContent = "Disconnected";
-              connectionStatus.className = "status disconnected";
+              updateConnectionStatus(
+                "Disconnected",
+                "Connection to monitor lost"
+              );
+            } else if (peer.iceConnectionState === "checking") {
+              updateConnectionStatus(
+                "Connecting...",
+                "Establishing connection to monitor..."
+              );
             }
           };
 
           peer.onconnectionstatechange = () => {
             console.log("🔗 Connection state:", peer.connectionState);
+            if (peer.connectionState === "connected") {
+              updateConnectionStatus(
+                "Connected",
+                "Video stream connected to monitor"
+              );
+            } else if (
+              peer.connectionState === "disconnected" ||
+              peer.connectionState === "failed"
+            ) {
+              updateConnectionStatus(
+                "Disconnected",
+                "Connection to monitor lost"
+              );
+            }
           };
         }
 
@@ -103,9 +229,31 @@
           localVideo.srcObject = stream;
 
           // Add tracks to peer connection
-          stream.getTracks().forEach((track) => {
-            console.log("➕ Adding track to peer connection:", track.kind);
-            peer.addTrack(track, stream);
+          const tracks = stream.getTracks();
+          console.log(
+            "📹 Available tracks:",
+            tracks.length,
+            tracks.map((t) => t.kind)
+          );
+
+          if (tracks.length === 0) {
+            console.error("❌ No tracks available in the stream!");
+            updateConnectionStatus(
+              "Error",
+              "No video tracks available. Please check your camera."
+            );
+            return;
+          }
+
+          tracks.forEach((track) => {
+            console.log(
+              "➕ Adding track to peer connection:",
+              track.kind,
+              track.readyState,
+              track.enabled
+            );
+            const sender = peer.addTrack(track, stream);
+            console.log("✅ Track added, sender:", sender);
           });
 
           // Set up ICE candidate handling
@@ -144,7 +292,11 @@
         } else {
           navigator.mediaDevices
             .getUserMedia({
-              video: true,
+              video: {
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                frameRate: { ideal: 30 },
+              },
               audio: false,
             })
             .then(getMediaAndConnect)
@@ -154,9 +306,10 @@
                 err.name,
                 err.message
               );
-              alert("Error accessing camera: " + err.message);
-              connectionStatus.textContent = "Camera Error";
-              connectionStatus.className = "status disconnected";
+              updateConnectionStatus(
+                "Camera Error",
+                `Could not access camera: ${err.message}. Please check camera permissions.`
+              );
             });
         }
       }
@@ -200,8 +353,10 @@
       // Handle disconnection and reconnection
       socket.on("disconnect", () => {
         console.log("🔌 Socket disconnected");
-        connectionStatus.textContent = "Disconnected";
-        connectionStatus.className = "status disconnected";
+        updateConnectionStatus(
+          "Disconnected",
+          "Connection to server lost. Attempting to reconnect..."
+        );
 
         // Don't close the peer connection immediately to allow for refresh reconnection
       });
