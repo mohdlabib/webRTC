@@ -1,70 +1,120 @@
 <!DOCTYPE html>
 <html>
-
-<head>
+  <head>
     <title>Client</title>
-</head>
+  </head>
 
-<body>
+  <body>
     <h1>Client (Camera)</h1>
     <video id="localVideo" autoplay playsinline muted></video>
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io();
-        socket.emit('role', 'client');
+      const socket = io();
+      socket.emit("role", "client");
 
-        const localVideo = document.getElementById('localVideo');
-        let peer;
+      const localVideo = document.getElementById("localVideo");
+      let peer;
 
-        let monitorSocketId = null;
+      let monitorSocketId = null;
 
-        socket.on('monitor-available', (id) => {
-            monitorSocketId = id;
+      socket.on("monitor-available", (id) => {
+        console.log("📡 Monitor available:", id);
+        monitorSocketId = id;
 
-            peer = new RTCPeerConnection();
+        peer = new RTCPeerConnection({
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        });
+        console.log("🔄 Created RTCPeerConnection");
 
-            navigator.mediaDevices.getUserMedia({
-                video: true
-            }).then(stream => {
-                localVideo.srcObject = stream;
-                stream.getTracks().forEach(track => {
-                    peer.addTrack(track, stream);
-                });
-
-                peer.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        socket.emit('ice-candidate', {
-                            target: monitorSocketId,
-                            candidate: event.candidate
-                        });
-                    }
-                };
-
-                peer.createOffer().then(offer => {
-                    return peer.setLocalDescription(offer);
-                }).then(() => {
-                    socket.emit('offer', {
-                        target: monitorSocketId,
-                        offer: peer.localDescription
-                    });
-                });
+        navigator.mediaDevices
+          .getUserMedia({
+            video: true,
+            audio: false,
+          })
+          .then((stream) => {
+            console.log("✅ Got media stream:", stream);
+            localVideo.srcObject = stream;
+            stream.getTracks().forEach((track) => {
+              console.log("➕ Adding track to peer connection:", track.kind);
+              peer.addTrack(track, stream);
             });
 
-            socket.on('answer', ({
-                answer
-            }) => {
-                peer.setRemoteDescription(new RTCSessionDescription(answer));
-            });
+            peer.onicecandidate = (event) => {
+              if (event.candidate) {
+                console.log("🧊 ICE candidate:", event.candidate);
+                socket.emit("ice-candidate", {
+                  target: monitorSocketId,
+                  candidate: event.candidate,
+                });
+              }
+            };
 
-            socket.on('ice-candidate', ({
-                candidate
-            }) => {
-                peer.addIceCandidate(new RTCIceCandidate(candidate));
+            peer
+              .createOffer()
+              .then((offer) => {
+                console.log("📝 Created offer");
+                return peer.setLocalDescription(offer);
+              })
+              .then(() => {
+                console.log("📤 Sending offer to monitor");
+                socket.emit("offer", {
+                  target: monitorSocketId,
+                  offer: peer.localDescription,
+                });
+              })
+              .catch((err) => {
+                console.error("❌ Error creating or sending offer:", err);
+              });
+          })
+          .catch((err) => {
+            console.error("❌ Error accessing camera:", err.name, err.message);
+            alert("Error accessing camera: " + err.message);
+          });
+
+        socket.on("answer", ({ answer }) => {
+          console.log("📥 Received answer from monitor");
+          peer
+            .setRemoteDescription(new RTCSessionDescription(answer))
+            .then(() => {
+              console.log("✅ Set remote description successfully");
+            })
+            .catch((err) => {
+              console.error("❌ Error setting remote description:", err);
             });
         });
 
-        socket.emit('get-monitor');
-    </script>
-</body>
+        socket.on("ice-candidate", ({ candidate }) => {
+          console.log("🧊 Received ICE candidate");
+          peer
+            .addIceCandidate(new RTCIceCandidate(candidate))
+            .then(() => {
+              console.log("✅ Added ICE candidate successfully");
+            })
+            .catch((err) => {
+              console.error("❌ Error adding ICE candidate:", err);
+            });
+        });
 
+        peer.oniceconnectionstatechange = () => {
+          console.log("💡 ICE connection state:", peer.iceConnectionState);
+        };
+
+        peer.onconnectionstatechange = () => {
+          console.log("🔗 Connection state:", peer.connectionState);
+        };
+      });
+
+      socket.emit("get-monitor");
+
+      socket.on("offer-request", ({ monitorSocketId }) => {
+        console.log("📥 Received offer request from monitor:", monitorSocketId);
+        if (!peer && monitorSocketId) {
+          console.log(
+            "🔄 Setting up peer connection in response to offer request"
+          );
+          socket.emit("monitor-available", monitorSocketId);
+        }
+      });
+    </script>
+  </body>
 </html>

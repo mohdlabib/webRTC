@@ -1,79 +1,107 @@
 <!DOCTYPE html>
 <html>
-
-<head>
+  <head>
     <title>Monitor</title>
     <style>
-        video {
-            width: 100%;
-            max-width: 720px;
-            background: black;
-        }
+      video {
+        width: 100%;
+        max-width: 720px;
+        background: black;
+      }
     </style>
-</head>
+  </head>
 
-<body>
+  <body>
     <h1>Monitor</h1>
     <video id="remoteVideo" autoplay playsinline muted></video>
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io();
-        socket.emit('role', 'monitor');
+      const socket = io();
+      socket.emit("role", "monitor");
 
-        const remoteVideo = document.getElementById('remoteVideo');
-        let peer;
-        let clientSocketId;
+      const remoteVideo = document.getElementById("remoteVideo");
+      let peer;
+      let clientSocketId;
 
-        socket.on('new-client', (clientId) => {
-            console.log('🆕 New client:', clientId);
-            clientSocketId = clientId;
+      socket.on("new-client", (clientId) => {
+        console.log("🆕 New client:", clientId);
+        clientSocketId = clientId;
 
-            peer = new RTCPeerConnection();
+        peer = new RTCPeerConnection({
+          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        });
+        console.log("🔄 Created RTCPeerConnection");
 
-            peer.ontrack = (event) => {
-                const stream = event.streams[0];
-                console.log('📡 Stream received:', stream);
-                remoteVideo.srcObject = stream;
-                remoteVideo.onloadedmetadata = () => remoteVideo.play();
-            };
+        peer.ontrack = (event) => {
+          const stream = event.streams[0];
+          console.log("📡 Stream received:", stream);
+          remoteVideo.srcObject = stream;
+          remoteVideo.onloadedmetadata = () => {
+            console.log("▶️ Playing video");
+            remoteVideo.play();
+          };
+        };
 
-            peer.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', {
-                        target: clientSocketId,
-                        candidate: event.candidate
-                    });
-                }
-            };
-
-            socket.emit('offer-request', {
-                monitorSocketId: socket.id
+        peer.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log("🧊 ICE candidate:", event.candidate);
+            socket.emit("ice-candidate", {
+              target: clientSocketId,
+              candidate: event.candidate,
             });
-        });
+          }
+        };
 
-        socket.on('offer', ({
-            sender,
-            offer
-        }) => {
-            clientSocketId = sender;
-            peer.setRemoteDescription(new RTCSessionDescription(offer)).then(() => {
-                return peer.createAnswer();
-            }).then(answer => {
-                return peer.setLocalDescription(answer);
-            }).then(() => {
-                socket.emit('answer', {
-                    target: sender,
-                    answer: peer.localDescription
-                });
+        peer.oniceconnectionstatechange = () => {
+          console.log("💡 ICE connection state:", peer.iceConnectionState);
+        };
+
+        peer.onconnectionstatechange = () => {
+          console.log("🔗 Connection state:", peer.connectionState);
+        };
+
+        console.log("📤 Sending offer request");
+        socket.emit("offer-request", {
+          monitorSocketId: socket.id,
+        });
+      });
+
+      socket.on("offer", ({ sender, offer }) => {
+        console.log("📥 Received offer from:", sender);
+        clientSocketId = sender;
+        peer
+          .setRemoteDescription(new RTCSessionDescription(offer))
+          .then(() => {
+            console.log("📝 Creating answer");
+            return peer.createAnswer();
+          })
+          .then((answer) => {
+            console.log("📝 Setting local description");
+            return peer.setLocalDescription(answer);
+          })
+          .then(() => {
+            console.log("📤 Sending answer to client");
+            socket.emit("answer", {
+              target: sender,
+              answer: peer.localDescription,
             });
-        });
+          })
+          .catch((err) => {
+            console.error("❌ Error creating or sending answer:", err);
+          });
+      });
 
-        socket.on('ice-candidate', ({
-            candidate
-        }) => {
-            peer.addIceCandidate(new RTCIceCandidate(candidate));
-        });
+      socket.on("ice-candidate", ({ candidate }) => {
+        console.log("🧊 Received ICE candidate");
+        peer
+          .addIceCandidate(new RTCIceCandidate(candidate))
+          .then(() => {
+            console.log("✅ Added ICE candidate successfully");
+          })
+          .catch((err) => {
+            console.error("❌ Error adding ICE candidate:", err);
+          });
+      });
     </script>
-</body>
-
+  </body>
 </html>
